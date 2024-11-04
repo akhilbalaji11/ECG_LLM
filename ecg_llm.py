@@ -4,11 +4,11 @@ from transformers import AutoTokenizer, AutoModel
 import torch
 
 # Load datasets
-path = 'ptbxl/'  # Set this to the actual path where your data is located
+path = 'ptbxl/'  # path of the database folder
 ptbxl_data = pd.read_csv(path + 'ptbxl_database.csv', index_col='ecg_id')
-scp_statements = pd.read_csv(path + 'scp_statements.csv', index_col=0)  # Note that scp_codes are now in the index
+scp_statements = pd.read_csv(path + 'scp_statements.csv', index_col=0)  
 
-# Prepare BioClinicalBERT model and tokenizer, load onto GPU if available
+# Prepare BioClinicalBERT model and tokenizer, load onto GPU (if available)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 tokenizer = AutoTokenizer.from_pretrained("emilyalsentzer/Bio_ClinicalBERT")
 model = AutoModel.from_pretrained("emilyalsentzer/Bio_ClinicalBERT").to(device)
@@ -56,7 +56,7 @@ def aggregate_embeddings(scp_codes, scp_statements):
         return aggregated_embedding
     return None
 
-# Process each record, here we can limit the number for testing purposes, e.g., ptbxl_data.head(100)
+# Process each record, we can also limit the number for testing purposes, e.g., ptbxl_data.head(100)
 results = {}
 for ecg_id, row in ptbxl_data.iterrows():
     scp_codes = ast.literal_eval(row['scp_codes'])
