@@ -7,9 +7,10 @@ import torch
 import torch.nn as nn
 from torch.nn.functional import cosine_similarity
 from torch.utils.data import DataLoader, Dataset
+from sklearn.model_selection import StratifiedKFold
 
 # Load datasets
-path = 'ptbxl/'  # Path of the database folder
+path = 'C:/Users/Akhil/ptbxl/'  # Path of the database folder
 ptbxl_data = pd.read_csv(path + 'ptbxl_database.csv', index_col='ecg_id')
 scp_statements = pd.read_csv(path + 'scp_statements.csv', index_col=0)
 
@@ -203,6 +204,71 @@ def get_stratified_dataloader(data, times, events, batch_size):
     dataset = StratifiedECGDataset(combined_data, combined_times, combined_events)
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
+def calculate_c_index(risk_scores, times, events):
+    concordant = 0
+    discordant = 0
+    n = len(risk_scores)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if events[i] == 1 or events[j] == 1:  # At least one is uncensored
+                # Check concordant or discordant pairs
+                if times[i] < times[j] and risk_scores[i] > risk_scores[j]:
+                    concordant += 1
+                elif times[i] > times[j] and risk_scores[i] < risk_scores[j]:
+                    concordant += 1
+                elif times[i] != times[j]:  # Only count discordant pairs if times differ
+                    discordant += 1
+
+    return concordant / (concordant + discordant) if (concordant + discordant) > 0 else 0.5
+
+# def stratified_cross_validation(data, times, events, n_splits=2, epochs=5, batch_size=128):
+#     """
+#     Perform two-fold stratified cross-validation with repeated trials.
+
+#     Args:
+#         data: Preprocessed ECG signals (numpy array).
+#         times: Follow-up times (numpy array).
+#         events: Event indicators (numpy array).
+#         n_splits: Number of folds (default = 2 for two-fold CV).
+#         epochs: Number of epochs for training.
+#         batch_size: Batch size for DataLoader.
+#     """
+#     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+#     c_indices = []
+
+#     for fold, (train_idx, test_idx) in enumerate(skf.split(data, events)):
+#         print(f"Fold {fold + 1}/{n_splits}")
+
+#         # Split data
+#         train_data, test_data = data[train_idx], data[test_idx]
+#         train_times, test_times = times[train_idx], times[test_idx]
+#         train_events, test_events = events[train_idx], events[test_idx]
+
+#         # Train the model
+#         train_finetuning_model(train_data, train_times, train_events, batch_size, epochs)
+
+#         # Evaluate on the test set
+#         test_risk_scores = []
+#         test_dataloader = get_stratified_dataloader(test_data, test_times, test_events, batch_size)
+
+#         for batch in test_dataloader:
+#             x, times_batch, events_batch = batch
+#             x = x.to(device)
+#             times_batch = times_batch.to(device)
+#             events_batch = events_batch.to(device)
+
+#             # Forward pass
+#             _, risk_scores, _ = finetuning_model(x)
+#             test_risk_scores.append(risk_scores.detach().cpu())
+
+#         test_risk_scores = torch.cat(test_risk_scores)
+#         test_c_index = calculate_c_index(test_risk_scores, torch.tensor(test_times), torch.tensor(test_events))
+#         c_indices.append(test_c_index)
+
+#         print(f"Test C-Index for Fold {fold + 1}: {test_c_index:.4f}")
+
+#     print(f"Average C-Index across folds: {np.mean(c_indices):.4f} ± {np.std(c_indices):.4f}")
 
 # Fine-Tuning Training Function
 def train_finetuning_model(data, times, events, batch_size, epochs=5, alpha=0.5):
@@ -211,17 +277,21 @@ def train_finetuning_model(data, times, events, batch_size, epochs=5, alpha=0.5)
 
     for epoch in range(epochs):
         total_loss = 0
+        all_risk_scores = []
+        all_times = []
+        all_events = []
+
         for batch in dataloader:
-            x, times, events = batch
+            x, times_batch, events_batch = batch
             x = x.to(device)
-            times = times.to(device)
-            events = events.to(device)
+            times_batch = times_batch.to(device)
+            events_batch = events_batch.to(device)
 
             # Forward pass
             recon_x, risk_scores, _ = finetuning_model(x)
 
             # Compute loss
-            loss = finetuning_loss(recon_x, x, risk_scores, times, events, alpha)
+            loss = finetuning_loss(recon_x, x, risk_scores.squeeze(), times_batch, events_batch, alpha)
 
             # Backpropagation
             optimizer.zero_grad()
@@ -230,10 +300,22 @@ def train_finetuning_model(data, times, events, batch_size, epochs=5, alpha=0.5)
 
             total_loss += loss.item()
 
-        print(f"Epoch {epoch + 1}/{epochs}, Fine-Tuning Loss: {total_loss / len(dataloader)}")
+            # Collect risk scores and ground truth for C-index calculation
+            all_risk_scores.append(risk_scores.detach().cpu())
+            all_times.append(times_batch.cpu())
+            all_events.append(events_batch.cpu())
+
+        # Concatenate all batches for C-index calculation
+        all_risk_scores = torch.cat(all_risk_scores)
+        all_times = torch.cat(all_times)
+        all_events = torch.cat(all_events)
+
+        # Calculate C-index
+        c_index = calculate_c_index(all_risk_scores, all_times, all_events)
+
+        print(f"Epoch {epoch + 1}/{epochs}, Fine-Tuning Loss: {total_loss / len(dataloader)}, C-Index: {c_index:.4f}")
+
         
-
-
 # Usage without UKB dataset (random)
 data = load_and_preprocess_data(ptbxl_data, sampling_rate=500, base_path=path)
 events = np.random.choice([0, 1], size=len(data))  # Example events
